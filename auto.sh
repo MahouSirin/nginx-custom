@@ -97,6 +97,7 @@ cd ..
 ### Copy BoringSSL's crypto libraries to OpenSSL Library directory
 cp build/crypto/libcrypto.a .openssl/lib
 cp build/ssl/libssl.a .openssl/lib
+cd ../..
 
 ### Temporary Ubuntu/Debian build error (libxslt/libxml2)
 ### URL : https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=721602
@@ -162,7 +163,6 @@ auto/configure \
 --add-module=./lib/ngx_brotli \
 --add-module=./lib/headers-more-nginx-module \
 ${BUILD_MODULES}
-
 
 ### Skip OpenSSL Build to prevent Error 127
 touch lib/boringssl/.openssl/include/openssl/ssl.h
