@@ -1,0 +1,34 @@
+[submodule "lib/headers-more-nginx-module"]
+	path = lib/headers-more-nginx-module
+	url = https://github.com/openresty/headers-more-nginx-module.git
+[submodule "lib/naxsi"]
+	path = lib/naxsi
+	url = https://github.com/nbs-system/naxsi.git
+[submodule "lib/nginx-dav-ext-module"]
+	path = lib/nginx-dav-ext-module
+	url = https://github.com/arut/nginx-dav-ext-module.git
+[submodule "lib/ngx_devel_kit"]
+	path = lib/ngx_devel_kit
+	url = https://github.com/simplresty/ngx_devel_kit.git
+[submodule "lib/ngx-fancyindex"]
+	path = lib/ngx-fancyindex
+	url = https://github.com/aperezdc/ngx-fancyindex.git
+[submodule "lib/zlib"]
+	path = lib/zlib
+	url = https://github.com/cloudflare/zlib.git
+	branch = gcc.amd64
+[submodule "lib/ngx_http_geoip2_module"]
+	path = lib/ngx_http_geoip2_module
+	url = https://github.com/leev/ngx_http_geoip2_module.git
+[submodule "lib/nginx-module-vts"]
+	path = lib/nginx-module-vts
+	url = https://github.com/vozlt/nginx-module-vts
+[submodule "lib/nginx-http-flv-module"]
+	path = lib/nginx-http-flv-module
+	url = https://github.com/winshining/nginx-http-flv-module.git
+[submodule "lib/ngx_brotli"]
+	path = lib/ngx_brotli
+	url = https://github.com/google/ngx_brotli.git
+[submodule "lib/boringssl"]
+	path = lib/boringssl
+	url = https://github.com/google/boringssl.git

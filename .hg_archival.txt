@@ -1,0 +1,6 @@
+repo: 4eff17414a4378feaba42876e0d3a6a50646cdee
+node: 3be9531610265d5e906baab1cac1cac608a952a3
+branch: quic
+latesttag: release-1.23.2
+latesttagdistance: 2
+changessincelatesttag: 872
