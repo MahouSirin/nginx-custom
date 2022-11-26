@@ -48,12 +48,10 @@ typedef struct {
     const u_char             *label;
 } ngx_quic_hkdf_t;
 
-#define ngx_quic_hkdf_set(label, out, prk)                                    \
-    {                                                                         \
-        (out)->len, (out)->data,                                              \
-        (prk)->len, (prk)->data,                                              \
-        (sizeof(label) - 1), (u_char *)(label),                               \
-    }
+#define ngx_quic_hkdf_set(seq, _label, _out, _prk)                            \
+    (seq)->out_len = (_out)->len; (seq)->out = (_out)->data;                  \
+    (seq)->prk_len = (_prk)->len, (seq)->prk = (_prk)->data,                  \
+    (seq)->label_len = (sizeof(_label) - 1); (seq)->label = (u_char *)(_label);
 
 
 static ngx_int_t ngx_hkdf_expand(u_char *out_key, size_t out_len,
@@ -149,8 +147,10 @@ ngx_quic_keys_set_initial_secret(ngx_quic_keys_t *keys, ngx_str_t *secret,
 {
     size_t              is_len;
     uint8_t             is[SHA256_DIGEST_LENGTH];
+    ngx_str_t           iss;
     ngx_uint_t          i;
     const EVP_MD       *digest;
+    ngx_quic_hkdf_t     seq[8];
     ngx_quic_secret_t  *client, *server;
 
     static const uint8_t salt[20] =
@@ -177,10 +177,8 @@ ngx_quic_keys_set_initial_secret(ngx_quic_keys_t *keys, ngx_str_t *secret,
         return NGX_ERROR;
     }
 
-    ngx_str_t iss = {
-        .data = is,
-        .len = is_len
-    };
+    iss.len = is_len;
+    iss.data = is;
 
     ngx_log_debug0(NGX_LOG_DEBUG_EVENT, log, 0,
                    "quic ngx_quic_set_initial_secret");
@@ -203,17 +201,15 @@ ngx_quic_keys_set_initial_secret(ngx_quic_keys_t *keys, ngx_str_t *secret,
     client->iv.len = NGX_QUIC_IV_LEN;
     server->iv.len = NGX_QUIC_IV_LEN;
 
-    ngx_quic_hkdf_t seq[] = {
-        /* labels per RFC 9001, 5.1. Packet Protection Keys */
-        ngx_quic_hkdf_set("tls13 client in", &client->secret, &iss),
-        ngx_quic_hkdf_set("tls13 quic key",  &client->key,    &client->secret),
-        ngx_quic_hkdf_set("tls13 quic iv",   &client->iv,     &client->secret),
-        ngx_quic_hkdf_set("tls13 quic hp",   &client->hp,     &client->secret),
-        ngx_quic_hkdf_set("tls13 server in", &server->secret, &iss),
-        ngx_quic_hkdf_set("tls13 quic key",  &server->key,    &server->secret),
-        ngx_quic_hkdf_set("tls13 quic iv",   &server->iv,     &server->secret),
-        ngx_quic_hkdf_set("tls13 quic hp",   &server->hp,     &server->secret),
-    };
+    /* labels per RFC 9001, 5.1. Packet Protection Keys */
+    ngx_quic_hkdf_set(&seq[0], "tls13 client in", &client->secret, &iss);
+    ngx_quic_hkdf_set(&seq[1], "tls13 quic key", &client->key, &client->secret);
+    ngx_quic_hkdf_set(&seq[2], "tls13 quic iv", &client->iv, &client->secret);
+    ngx_quic_hkdf_set(&seq[3], "tls13 quic hp", &client->hp, &client->secret);
+    ngx_quic_hkdf_set(&seq[4], "tls13 server in", &server->secret, &iss);
+    ngx_quic_hkdf_set(&seq[5], "tls13 quic key", &server->key, &server->secret);
+    ngx_quic_hkdf_set(&seq[6], "tls13 quic iv", &server->iv, &server->secret);
+    ngx_quic_hkdf_set(&seq[7], "tls13 quic hp", &server->hp, &server->secret);
 
     for (i = 0; i < (sizeof(seq) / sizeof(seq[0])); i++) {
         if (ngx_quic_hkdf_expand(&seq[i], digest, log) != NGX_OK) {
@@ -639,6 +635,7 @@ ngx_quic_keys_set_encryption_secret(ngx_log_t *log, ngx_uint_t is_write,
     ngx_int_t            key_len;
     ngx_str_t            secret_str;
     ngx_uint_t           i;
+    ngx_quic_hkdf_t      seq[3];
     ngx_quic_secret_t   *peer_secret;
     ngx_quic_ciphers_t   ciphers;
 
@@ -670,11 +667,10 @@ ngx_quic_keys_set_encryption_secret(ngx_log_t *log, ngx_uint_t is_write,
     secret_str.len = secret_len;
     secret_str.data = (u_char *) secret;
 
-    ngx_quic_hkdf_t seq[] = {
-        ngx_quic_hkdf_set("tls13 quic key", &peer_secret->key, &secret_str),
-        ngx_quic_hkdf_set("tls13 quic iv", &peer_secret->iv, &secret_str),
-        ngx_quic_hkdf_set("tls13 quic hp", &peer_secret->hp, &secret_str),
-    };
+    ngx_quic_hkdf_set(&seq[0], "tls13 quic key",
+                      &peer_secret->key, &secret_str);
+    ngx_quic_hkdf_set(&seq[1], "tls13 quic iv", &peer_secret->iv, &secret_str);
+    ngx_quic_hkdf_set(&seq[2], "tls13 quic hp", &peer_secret->hp, &secret_str);
 
     for (i = 0; i < (sizeof(seq) / sizeof(seq[0])); i++) {
         if (ngx_quic_hkdf_expand(&seq[i], ciphers.d, log) != NGX_OK) {
@@ -720,6 +716,7 @@ ngx_int_t
 ngx_quic_keys_update(ngx_connection_t *c, ngx_quic_keys_t *keys)
 {
     ngx_uint_t           i;
+    ngx_quic_hkdf_t      seq[6];
     ngx_quic_ciphers_t   ciphers;
     ngx_quic_secrets_t  *current, *next;
 
@@ -744,20 +741,18 @@ ngx_quic_keys_update(ngx_connection_t *c, ngx_quic_keys_t *keys)
     next->server.iv.len = NGX_QUIC_IV_LEN;
     next->server.hp = current->server.hp;
 
-    ngx_quic_hkdf_t seq[] = {
-        ngx_quic_hkdf_set("tls13 quic ku",
-                          &next->client.secret, &current->client.secret),
-        ngx_quic_hkdf_set("tls13 quic key",
-                          &next->client.key, &next->client.secret),
-        ngx_quic_hkdf_set("tls13 quic iv",
-                          &next->client.iv, &next->client.secret),
-        ngx_quic_hkdf_set("tls13 quic ku",
-                          &next->server.secret, &current->server.secret),
-        ngx_quic_hkdf_set("tls13 quic key",
-                          &next->server.key, &next->server.secret),
-        ngx_quic_hkdf_set("tls13 quic iv",
-                          &next->server.iv, &next->server.secret),
-    };
+    ngx_quic_hkdf_set(&seq[0], "tls13 quic ku",
+                      &next->client.secret, &current->client.secret);
+    ngx_quic_hkdf_set(&seq[1], "tls13 quic key",
+                      &next->client.key, &next->client.secret);
+    ngx_quic_hkdf_set(&seq[2], "tls13 quic iv",
+                      &next->client.iv, &next->client.secret);
+    ngx_quic_hkdf_set(&seq[3], "tls13 quic ku",
+                      &next->server.secret, &current->server.secret);
+    ngx_quic_hkdf_set(&seq[4], "tls13 quic key",
+                      &next->server.key, &next->server.secret);
+    ngx_quic_hkdf_set(&seq[5], "tls13 quic iv",
+                      &next->server.iv, &next->server.secret);
 
     for (i = 0; i < (sizeof(seq) / sizeof(seq[0])); i++) {
         if (ngx_quic_hkdf_expand(&seq[i], ciphers.d, c->log) != NGX_OK) {
@@ -969,10 +964,14 @@ ngx_quic_parse_pn(u_char **pos, ngx_int_t len, u_char *mask,
 static void
 ngx_quic_compute_nonce(u_char *nonce, size_t len, uint64_t pn)
 {
-    nonce[len - 4] ^= (pn & 0xff000000) >> 24;
-    nonce[len - 3] ^= (pn & 0x00ff0000) >> 16;
-    nonce[len - 2] ^= (pn & 0x0000ff00) >> 8;
-    nonce[len - 1] ^= (pn & 0x000000ff);
+    nonce[len - 8] ^= (pn >> 56) & 0x3f;
+    nonce[len - 7] ^= (pn >> 48) & 0xff;
+    nonce[len - 6] ^= (pn >> 40) & 0xff;
+    nonce[len - 5] ^= (pn >> 32) & 0xff;
+    nonce[len - 4] ^= (pn >> 24) & 0xff;
+    nonce[len - 3] ^= (pn >> 16) & 0xff;
+    nonce[len - 2] ^= (pn >> 8) & 0xff;
+    nonce[len - 1] ^= pn & 0xff;
 }
 
 
@@ -993,8 +992,9 @@ ngx_quic_decrypt(ngx_quic_header_t *pkt, uint64_t *largest_pn)
     u_char              *p, *sample;
     size_t               len;
     uint64_t             pn, lpn;
-    ngx_int_t            pnl, rc, key_phase;
+    ngx_int_t            pnl, rc;
     ngx_str_t            in, ad;
+    ngx_uint_t           key_phase;
     ngx_quic_secret_t   *secret;
     ngx_quic_ciphers_t   ciphers;
     uint8_t              nonce[NGX_QUIC_IV_LEN], mask[NGX_QUIC_HP_LEN];
