@@ -21,6 +21,7 @@ static ngx_quic_stream_t *ngx_quic_get_stream(ngx_connection_t *c, uint64_t id);
 static ngx_int_t ngx_quic_reject_stream(ngx_connection_t *c, uint64_t id);
 static void ngx_quic_init_stream_handler(ngx_event_t *ev);
 static void ngx_quic_init_streams_handler(ngx_connection_t *c);
+static ngx_int_t ngx_quic_do_init_streams(ngx_connection_t *c);
 static ngx_quic_stream_t *ngx_quic_create_stream(ngx_connection_t *c,
     uint64_t id);
 static void ngx_quic_empty_handler(ngx_event_t *ev);
@@ -33,6 +34,7 @@ static ngx_chain_t *ngx_quic_stream_send_chain(ngx_connection_t *c,
 static ngx_int_t ngx_quic_stream_flush(ngx_quic_stream_t *qs);
 static void ngx_quic_stream_cleanup_handler(void *data);
 static ngx_int_t ngx_quic_close_stream(ngx_quic_stream_t *qs);
+static ngx_int_t ngx_quic_can_shutdown(ngx_connection_t *c);
 static ngx_int_t ngx_quic_control_flow(ngx_quic_stream_t *qs, uint64_t last);
 static ngx_int_t ngx_quic_update_flow(ngx_quic_stream_t *qs, uint64_t last);
 static ngx_int_t ngx_quic_update_max_stream_data(ngx_quic_stream_t *qs);
@@ -50,6 +52,10 @@ ngx_quic_open_stream(ngx_connection_t *c, ngx_uint_t bidi)
 
     pc = c->quic ? c->quic->parent : c;
     qc = ngx_quic_get_connection(pc);
+
+    if (qc->closing) {
+        return NULL;
+    }
 
     if (bidi) {
         if (qc->streams.server_streams_bidi
@@ -161,12 +167,9 @@ ngx_quic_close_streams(ngx_connection_t *c, ngx_quic_connection_t *qc)
     ngx_pool_t         *pool;
     ngx_queue_t        *q;
     ngx_rbtree_t       *tree;
+    ngx_connection_t   *sc;
     ngx_rbtree_node_t  *node;
     ngx_quic_stream_t  *qs;
-
-#if (NGX_DEBUG)
-    ngx_uint_t          ns;
-#endif
 
     while (!ngx_queue_empty(&qc->streams.uninitialized)) {
         q = ngx_queue_head(&qc->streams.uninitialized);
@@ -185,34 +188,34 @@ ngx_quic_close_streams(ngx_connection_t *c, ngx_quic_connection_t *qc)
         return NGX_OK;
     }
 
-#if (NGX_DEBUG)
-    ns = 0;
-#endif
-
     node = ngx_rbtree_min(tree->root, tree->sentinel);
 
     while (node) {
         qs = (ngx_quic_stream_t *) node;
         node = ngx_rbtree_next(tree, node);
+        sc = qs->connection;
 
         qs->recv_state = NGX_QUIC_STREAM_RECV_RESET_RECVD;
         qs->send_state = NGX_QUIC_STREAM_SEND_RESET_SENT;
 
-        if (qs->connection == NULL) {
+        if (sc == NULL) {
             ngx_quic_close_stream(qs);
             continue;
         }
 
-        ngx_quic_set_event(qs->connection->read);
-        ngx_quic_set_event(qs->connection->write);
+        ngx_quic_set_event(sc->read);
+        ngx_quic_set_event(sc->write);
 
-#if (NGX_DEBUG)
-        ns++;
-#endif
+        sc->close = 1;
+        sc->read->handler(sc->read);
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_EVENT, c->log, 0,
-                   "quic connection has %ui active streams", ns);
+    if (tree->root == tree->sentinel) {
+        return NGX_OK;
+    }
+
+    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                   "quic connection has active streams");
 
     return NGX_AGAIN;
 }
@@ -553,14 +556,21 @@ ngx_quic_init_streams(ngx_connection_t *c)
         return NGX_OK;
     }
 
-    ngx_quic_init_streams_handler(c);
-
-    return NGX_OK;
+    return ngx_quic_do_init_streams(c);
 }
 
 
 static void
 ngx_quic_init_streams_handler(ngx_connection_t *c)
+{
+    if (ngx_quic_do_init_streams(c) != NGX_OK) {
+        ngx_quic_close_connection(c, NGX_ERROR);
+    }
+}
+
+
+static ngx_int_t
+ngx_quic_do_init_streams(ngx_connection_t *c)
 {
     ngx_queue_t            *q;
     ngx_quic_stream_t      *qs;
@@ -569,6 +579,12 @@ ngx_quic_init_streams_handler(ngx_connection_t *c)
     ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0, "quic init streams");
 
     qc = ngx_quic_get_connection(c);
+
+    if (qc->conf->init) {
+        if (qc->conf->init(c) != NGX_OK) {
+            return NGX_ERROR;
+        }
+    }
 
     for (q = ngx_queue_head(&qc->streams.uninitialized);
          q != ngx_queue_sentinel(&qc->streams.uninitialized);
@@ -579,6 +595,8 @@ ngx_quic_init_streams_handler(ngx_connection_t *c)
     }
 
     qc->streams.initialized = 1;
+
+    return NGX_OK;
 }
 
 
@@ -587,6 +605,7 @@ ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
 {
     ngx_log_t              *log;
     ngx_pool_t             *pool;
+    ngx_uint_t              reusable;
     ngx_queue_t            *q;
     ngx_connection_t       *sc;
     ngx_quic_stream_t      *qs;
@@ -639,10 +658,14 @@ ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
     *log = *c->log;
     pool->log = log;
 
+    reusable = c->reusable;
+    ngx_reusable_connection(c, 0);
+
     sc = ngx_get_connection(c->fd, log);
     if (sc == NULL) {
         ngx_destroy_pool(pool);
         ngx_queue_insert_tail(&qc->streams.free, &qs->queue);
+        ngx_reusable_connection(c, reusable);
         return NULL;
     }
 
@@ -712,6 +735,7 @@ ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
         ngx_close_connection(sc);
         ngx_destroy_pool(pool);
         ngx_queue_insert_tail(&qc->streams.free, &qs->queue);
+        ngx_reusable_connection(c, reusable);
         return NULL;
     }
 
@@ -721,6 +745,31 @@ ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
     ngx_rbtree_insert(&qc->streams.tree, &qs->node);
 
     return qs;
+}
+
+
+void
+ngx_quic_cancelable_stream(ngx_connection_t *c)
+{
+    ngx_connection_t       *pc;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    qs = c->quic;
+    pc = qs->parent;
+    qc = ngx_quic_get_connection(pc);
+
+    if (!qs->cancelable) {
+        qs->cancelable = 1;
+
+        if (ngx_quic_can_shutdown(pc) == NGX_OK) {
+            ngx_reusable_connection(pc, 1);
+
+            if (qc->shutdown) {
+                ngx_quic_shutdown_quic(pc);
+            }
+        }
+    }
 }
 
 
@@ -854,7 +903,7 @@ ngx_quic_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
 
     qs->send_state = NGX_QUIC_STREAM_SEND_SEND;
 
-    flow = qs->acked + qc->conf->stream_buffer_size - c->sent;
+    flow = qs->acked + qc->conf->stream_buffer_size - qs->sent;
 
     if (flow == 0) {
         wev->ready = 0;
@@ -867,13 +916,14 @@ ngx_quic_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
 
     n = qs->send.size;
 
-    in = ngx_quic_write_buffer(pc, &qs->send, in, limit, c->sent);
+    in = ngx_quic_write_buffer(pc, &qs->send, in, limit, qs->sent);
     if (in == NGX_CHAIN_ERROR) {
         return NGX_CHAIN_ERROR;
     }
 
     n = qs->send.size - n;
     c->sent += n;
+    qs->sent += n;
     qc->streams.sent += n;
 
     if (flow == n) {
@@ -1012,9 +1062,12 @@ ngx_quic_close_stream(ngx_quic_stream_t *qs)
     if (!qc->closing) {
         /* make sure everything is sent and final size is received */
 
-        if (qs->recv_state == NGX_QUIC_STREAM_RECV_RECV
-            || qs->send_state == NGX_QUIC_STREAM_SEND_READY
-            || qs->send_state == NGX_QUIC_STREAM_SEND_SEND)
+        if (qs->recv_state == NGX_QUIC_STREAM_RECV_RECV) {
+            return NGX_OK;
+        }
+
+        if (qs->send_state != NGX_QUIC_STREAM_SEND_DATA_RECVD
+            && qs->send_state != NGX_QUIC_STREAM_SEND_RESET_RECVD)
         {
             return NGX_OK;
         }
@@ -1031,7 +1084,16 @@ ngx_quic_close_stream(ngx_quic_stream_t *qs)
 
     if (qc->closing) {
         /* schedule handler call to continue ngx_quic_close_connection() */
-        ngx_post_event(pc->read, &ngx_posted_events);
+        ngx_post_event(&qc->close, &ngx_posted_events);
+        return NGX_OK;
+    }
+
+    if (!pc->reusable && ngx_quic_can_shutdown(pc) == NGX_OK) {
+        ngx_reusable_connection(pc, 1);
+    }
+
+    if (qc->shutdown) {
+        ngx_quic_shutdown_quic(pc);
         return NGX_OK;
     }
 
@@ -1056,9 +1118,34 @@ ngx_quic_close_stream(ngx_quic_stream_t *qs)
         ngx_quic_queue_frame(qc, frame);
     }
 
-    if (qc->shutdown) {
-        ngx_post_event(pc->read, &ngx_posted_events);
-    }
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_quic_can_shutdown(ngx_connection_t *c)
+{
+    ngx_rbtree_t           *tree;
+    ngx_rbtree_node_t      *node;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    tree = &qc->streams.tree;
+
+    if (tree->root != tree->sentinel) {
+        for (node = ngx_rbtree_min(tree->root, tree->sentinel);
+             node;
+             node = ngx_rbtree_next(tree, node))
+        {
+            qs = (ngx_quic_stream_t *) node;
+
+            if (!qs->cancelable) {
+                return NGX_DECLINED;
+            }
+        }
+     }
 
     return NGX_OK;
 }
@@ -1422,36 +1509,70 @@ ngx_quic_handle_max_streams_frame(ngx_connection_t *c,
 void
 ngx_quic_handle_stream_ack(ngx_connection_t *c, ngx_quic_frame_t *f)
 {
-    uint64_t                sent, unacked;
+    uint64_t                acked;
     ngx_quic_stream_t      *qs;
     ngx_quic_connection_t  *qc;
 
     qc = ngx_quic_get_connection(c);
 
-    qs = ngx_quic_find_stream(&qc->streams.tree, f->u.stream.stream_id);
-    if (qs == NULL) {
+    switch (f->type) {
+
+    case NGX_QUIC_FT_RESET_STREAM:
+
+        qs = ngx_quic_find_stream(&qc->streams.tree, f->u.reset_stream.id);
+        if (qs == NULL) {
+            return;
+        }
+
+        qs->send_state = NGX_QUIC_STREAM_SEND_RESET_RECVD;
+
+        ngx_log_debug2(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                       "quic stream id:0x%xL ack reset final_size:%uL",
+                       qs->id, f->u.reset_stream.final_size);
+
+        break;
+
+    case NGX_QUIC_FT_STREAM:
+
+        qs = ngx_quic_find_stream(&qc->streams.tree, f->u.stream.stream_id);
+        if (qs == NULL) {
+            return;
+        }
+
+        acked = qs->acked;
+        qs->acked += f->u.stream.length;
+
+        if (f->u.stream.fin) {
+            qs->fin_acked = 1;
+        }
+
+        if (qs->send_state == NGX_QUIC_STREAM_SEND_DATA_SENT
+            && qs->acked == qs->sent && qs->fin_acked)
+        {
+            qs->send_state = NGX_QUIC_STREAM_SEND_DATA_RECVD;
+        }
+
+        ngx_log_debug4(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                       "quic stream id:0x%xL ack len:%uL fin:%d unacked:%uL",
+                       qs->id, f->u.stream.length, f->u.stream.fin,
+                       qs->sent - qs->acked);
+
+        if (qs->connection
+            && qs->sent - acked == qc->conf->stream_buffer_size
+            && f->u.stream.length > 0)
+        {
+            ngx_quic_set_event(qs->connection->write);
+        }
+
+        break;
+
+    default:
         return;
     }
 
     if (qs->connection == NULL) {
-        qs->acked += f->u.stream.length;
-        return;
+        ngx_quic_close_stream(qs);
     }
-
-    sent = qs->connection->sent;
-    unacked = sent - qs->acked;
-    qs->acked += f->u.stream.length;
-
-    ngx_log_debug4(NGX_LOG_DEBUG_EVENT, c->log, 0,
-                   "quic stream id:0x%xL ack len:%uL acked:%uL unacked:%uL",
-                   qs->id, f->u.stream.length, qs->acked, sent - qs->acked);
-
-    if (unacked != qc->conf->stream_buffer_size) {
-        /* not blocked on buffer size */
-        return;
-    }
-
-    ngx_quic_set_event(qs->connection->write);
 }
 
 

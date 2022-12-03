@@ -28,6 +28,10 @@
 #define NGX_QUIC_STREAM_UNIDIRECTIONAL       0x02
 
 
+typedef ngx_int_t (*ngx_quic_init_pt)(ngx_connection_t *c);
+typedef void (*ngx_quic_shutdown_pt)(ngx_connection_t *c);
+
+
 typedef enum {
     NGX_QUIC_STREAM_SEND_READY = 0,
     NGX_QUIC_STREAM_SEND_SEND,
@@ -74,6 +78,9 @@ typedef struct {
     ngx_int_t                      stream_reject_code_uni;
     ngx_int_t                      stream_reject_code_bidi;
 
+    ngx_quic_init_pt               init;
+    ngx_quic_shutdown_pt           shutdown;
+
     u_char                         av_token_key[NGX_QUIC_AV_KEY_LEN];
     u_char                         sr_token_key[NGX_QUIC_SR_KEY_LEN];
 } ngx_quic_conf_t;
@@ -85,6 +92,7 @@ struct ngx_quic_stream_s {
     ngx_connection_t              *parent;
     ngx_connection_t              *connection;
     uint64_t                       id;
+    uint64_t                       sent;
     uint64_t                       acked;
     uint64_t                       send_max_data;
     uint64_t                       send_offset;
@@ -98,7 +106,8 @@ struct ngx_quic_stream_s {
     ngx_quic_buffer_t              recv;
     ngx_quic_stream_send_state_e   send_state;
     ngx_quic_stream_recv_state_e   recv_state;
-    ngx_uint_t                     cancelable;  /* unsigned  cancelable:1; */
+    unsigned                       cancelable:1;
+    unsigned                       fin_acked:1;
 };
 
 
@@ -113,6 +122,7 @@ void ngx_quic_shutdown_connection(ngx_connection_t *c, ngx_uint_t err,
     const char *reason);
 ngx_int_t ngx_quic_reset_stream(ngx_connection_t *c, ngx_uint_t err);
 ngx_int_t ngx_quic_shutdown_stream(ngx_connection_t *c, int how);
+void ngx_quic_cancelable_stream(ngx_connection_t *c);
 ngx_int_t ngx_quic_handle_read_event(ngx_event_t *rev, ngx_uint_t flags);
 ngx_int_t ngx_quic_handle_write_event(ngx_event_t *wev, size_t lowat);
 ngx_int_t ngx_quic_get_packet_dcid(ngx_log_t *log, u_char *data, size_t len,

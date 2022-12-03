@@ -5,8 +5,9 @@ Inspired by [hakasenyang](https://github.com/hakasenyang/nginx-build).
 
 Original source code can be found on [hg.nginx.org](https://hg.nginx.org/nginx-quic).
 
-## 아래의 필수 라이브러리를 설치해주세요.
-- Ubuntu / Debian - `apt install libjemalloc-dev uuid-dev libatomic1 libatomic-ops-dev expat unzip autoconf automake libtool libgd-dev libmaxminddb-dev libxslt1-dev libpcre2-dev libpcre3-dev cmake ninja-build golang-go zlib1g-dev libxml2-dev g++ curl`
+## 아래의 필수 라이브러리를 설치해주세요. (Ubuntu/Debian)
+- [Go Language](https://go.dev/dl/)
+- APT Package - `apt install libjemalloc-dev uuid-dev libatomic1 libatomic-ops-dev expat unzip autoconf automake libtool libgd-dev libmaxminddb-dev libxslt1-dev libpcre2-dev libpcre3-dev cmake ninja-build zlib1g-dev libxml2-dev g++ curl`
 
 ## 설치 방법
 1. 이 명령어를 이용하여 다운로드 합니다. - `git clone https://github.com/Raiden-Ei/nginx-custom.git --recursive`

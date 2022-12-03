@@ -15,8 +15,7 @@ static ngx_quic_connection_t *ngx_quic_new_connection(ngx_connection_t *c,
 static ngx_int_t ngx_quic_handle_stateless_reset(ngx_connection_t *c,
     ngx_quic_header_t *pkt);
 static void ngx_quic_input_handler(ngx_event_t *rev);
-
-static void ngx_quic_close_timer_handler(ngx_event_t *ev);
+static void ngx_quic_close_handler(ngx_event_t *ev);
 
 static ngx_int_t ngx_quic_handle_datagram(ngx_connection_t *c, ngx_buf_t *b,
     ngx_quic_conf_t *conf);
@@ -73,7 +72,7 @@ ngx_quic_connstate_dbg(ngx_connection_t *c)
 
     if (qc) {
 
-        if (qc->error) {
+        if (qc->error != (ngx_uint_t) -1) {
             p = ngx_slprintf(p, last, "%s", qc->error_app ? " app" : "");
             p = ngx_slprintf(p, last, " error:%ui", qc->error);
 
@@ -276,17 +275,18 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
     qc->pto.log = c->log;
     qc->pto.data = c;
     qc->pto.handler = ngx_quic_pto_handler;
-    qc->pto.cancelable = 1;
 
     qc->push.log = c->log;
     qc->push.data = c;
     qc->push.handler = ngx_quic_push_handler;
-    qc->push.cancelable = 1;
+
+    qc->close.log = c->log;
+    qc->close.data = c;
+    qc->close.handler = ngx_quic_close_handler;
 
     qc->path_validation.log = c->log;
     qc->path_validation.data = c;
     qc->path_validation.handler = ngx_quic_path_validation_handler;
-    qc->path_validation.cancelable = 1;
 
     qc->conf = conf;
 
@@ -336,6 +336,9 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
     if (ngx_quic_open_sockets(c, qc, pkt) != NGX_OK) {
         return NULL;
     }
+
+    c->idle = 1;
+    ngx_reusable_connection(c, 1);
 
     ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
                    "quic connection created");
@@ -414,23 +417,26 @@ ngx_quic_input_handler(ngx_event_t *rev)
     }
 
     if (c->close) {
-        qc->error_reason = "graceful shutdown";
-        ngx_quic_close_connection(c, NGX_OK);
-        return;
-    }
+        c->close = 0;
 
-    if (!rev->ready) {
-        if (qc->closing) {
-            ngx_quic_close_connection(c, NGX_OK);
+        if (!ngx_exiting) {
+            qc->error = NGX_QUIC_ERR_NO_ERROR;
+            qc->error_reason = "graceful shutdown";
+            ngx_quic_close_connection(c, NGX_ERROR);
+            return;
+        }
 
-        } else if (qc->shutdown) {
-            ngx_quic_shutdown_quic(c);
+        if (!qc->closing && qc->conf->shutdown) {
+            qc->conf->shutdown(c);
         }
 
         return;
     }
 
     b = c->udp->buffer;
+    if (b == NULL) {
+        return;
+    }
 
     rc = ngx_quic_handle_datagram(c, b, NULL);
 
@@ -506,31 +512,21 @@ ngx_quic_close_connection(ngx_connection_t *c, ngx_int_t rc)
             qc->error_level = c->ssl ? SSL_quic_read_level(c->ssl->connection)
                                      : ssl_encryption_initial;
 
+            if (qc->error == (ngx_uint_t) -1) {
+                qc->error = NGX_QUIC_ERR_INTERNAL_ERROR;
+                qc->error_app = 0;
+            }
+
+            ngx_log_debug5(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                           "quic close immediate term:%d drain:%d "
+                           "%serror:%ui \"%s\"",
+                           rc == NGX_ERROR ? 1 : 0, qc->draining,
+                           qc->error_app ? "app " : "", qc->error,
+                           qc->error_reason ? qc->error_reason : "");
+
             if (rc == NGX_OK) {
-                ngx_log_debug1(NGX_LOG_DEBUG_EVENT, c->log, 0,
-                               "quic close immediate drain:%d",
-                               qc->draining);
-
-                qc->close.log = c->log;
-                qc->close.data = c;
-                qc->close.handler = ngx_quic_close_timer_handler;
-                qc->close.cancelable = 1;
-
                 ctx = ngx_quic_get_send_ctx(qc, qc->error_level);
-
                 ngx_add_timer(&qc->close, 3 * ngx_quic_pto(c, ctx));
-
-                qc->error = NGX_QUIC_ERR_NO_ERROR;
-
-            } else {
-                if (qc->error == 0 && !qc->error_app) {
-                    qc->error = NGX_QUIC_ERR_INTERNAL_ERROR;
-                }
-
-                ngx_log_debug3(NGX_LOG_DEBUG_EVENT, c->log, 0,
-                               "quic close immediate due to %serror: %ui %s",
-                               qc->error_app ? "app " : "", qc->error,
-                               qc->error_reason ? qc->error_reason : "");
             }
 
             (void) ngx_quic_send_cc(c);
@@ -574,6 +570,10 @@ ngx_quic_close_connection(ngx_connection_t *c, ngx_int_t rc)
         return;
     }
 
+    if (qc->close.posted) {
+        ngx_delete_posted_event(&qc->close);
+    }
+
     ngx_quic_close_sockets(c);
 
     ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0, "quic close completed");
@@ -612,12 +612,17 @@ ngx_quic_finalize_connection(ngx_connection_t *c, ngx_uint_t err,
     ngx_quic_connection_t  *qc;
 
     qc = ngx_quic_get_connection(c);
+
+    if (qc->closing) {
+        return;
+    }
+
     qc->error = err;
     qc->error_reason = reason;
     qc->error_app = 1;
     qc->error_ftype = 0;
 
-    ngx_quic_close_connection(c, NGX_ERROR);
+    ngx_post_event(&qc->close, &ngx_posted_events);
 }
 
 
@@ -637,14 +642,15 @@ ngx_quic_shutdown_connection(ngx_connection_t *c, ngx_uint_t err,
 
 
 static void
-ngx_quic_close_timer_handler(ngx_event_t *ev)
+ngx_quic_close_handler(ngx_event_t *ev)
 {
     ngx_connection_t  *c;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, ev->log, 0, "quic close timer");
+    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, ev->log, 0, "quic close handler");
 
     c = ev->data;
-    ngx_quic_close_connection(c, NGX_DONE);
+
+    ngx_quic_close_connection(c, NGX_OK);
 }
 
 
@@ -939,7 +945,7 @@ ngx_quic_handle_payload(ngx_connection_t *c, ngx_quic_header_t *pkt)
 
     qc = ngx_quic_get_connection(c);
 
-    qc->error = 0;
+    qc->error = (ngx_uint_t) -1;
     qc->error_reason = 0;
 
     c->log->action = "decrypting packet";
@@ -1429,31 +1435,10 @@ ngx_quic_push_handler(ngx_event_t *ev)
 void
 ngx_quic_shutdown_quic(ngx_connection_t *c)
 {
-    ngx_rbtree_t           *tree;
-    ngx_rbtree_node_t      *node;
-    ngx_quic_stream_t      *qs;
     ngx_quic_connection_t  *qc;
 
-    qc = ngx_quic_get_connection(c);
-
-    if (qc->closing) {
-        return;
+    if (c->reusable) {
+        qc = ngx_quic_get_connection(c);
+        ngx_quic_finalize_connection(c, qc->shutdown_code, qc->shutdown_reason);
     }
-
-    tree = &qc->streams.tree;
-
-    if (tree->root != tree->sentinel) {
-        for (node = ngx_rbtree_min(tree->root, tree->sentinel);
-             node;
-             node = ngx_rbtree_next(tree, node))
-        {
-            qs = (ngx_quic_stream_t *) node;
-
-            if (!qs->cancelable) {
-                return;
-            }
-        }
-    }
-
-    ngx_quic_finalize_connection(c, qc->shutdown_code, qc->shutdown_reason);
 }

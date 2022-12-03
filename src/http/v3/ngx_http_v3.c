@@ -17,21 +17,18 @@ static void ngx_http_v3_cleanup_session(void *data);
 ngx_int_t
 ngx_http_v3_init_session(ngx_connection_t *c)
 {
-    ngx_connection_t       *pc;
-    ngx_pool_cleanup_t     *cln;
-    ngx_http_connection_t  *hc;
-    ngx_http_v3_session_t  *h3c;
+    ngx_pool_cleanup_t      *cln;
+    ngx_http_connection_t   *hc;
+    ngx_http_v3_session_t   *h3c;
+#if (NGX_HTTP_V3_HQ)
+    ngx_http_v3_srv_conf_t  *h3scf;
+#endif
 
-    pc = c->quic->parent;
-    hc = pc->data;
-
-    if (hc->v3_session) {
-        return NGX_OK;
-    }
+    hc = c->data;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 init session");
 
-    h3c = ngx_pcalloc(pc->pool, sizeof(ngx_http_v3_session_t));
+    h3c = ngx_pcalloc(c->pool, sizeof(ngx_http_v3_session_t));
     if (h3c == NULL) {
         goto failed;
     }
@@ -39,19 +36,25 @@ ngx_http_v3_init_session(ngx_connection_t *c)
     h3c->max_push_id = (uint64_t) -1;
     h3c->goaway_push_id = (uint64_t) -1;
 
+#if (NGX_HTTP_V3_HQ)
+    h3scf = ngx_http_get_module_srv_conf(hc->conf_ctx, ngx_http_v3_module);
+    if (h3scf->hq) {
+        h3c->hq = 1;
+    }
+#endif
+
     ngx_queue_init(&h3c->blocked);
     ngx_queue_init(&h3c->pushing);
 
-    h3c->keepalive.log = pc->log;
-    h3c->keepalive.data = pc;
+    h3c->keepalive.log = c->log;
+    h3c->keepalive.data = c;
     h3c->keepalive.handler = ngx_http_v3_keepalive_handler;
-    h3c->keepalive.cancelable = 1;
 
-    h3c->table.send_insert_count.log = pc->log;
-    h3c->table.send_insert_count.data = pc;
+    h3c->table.send_insert_count.log = c->log;
+    h3c->table.send_insert_count.data = c;
     h3c->table.send_insert_count.handler = ngx_http_v3_inc_insert_count_handler;
 
-    cln = ngx_pool_cleanup_add(pc->pool, 0);
+    cln = ngx_pool_cleanup_add(c->pool, 0);
     if (cln == NULL) {
         goto failed;
     }
@@ -61,7 +64,7 @@ ngx_http_v3_init_session(ngx_connection_t *c)
 
     hc->v3_session = h3c;
 
-    return ngx_http_v3_send_settings(c);
+    return NGX_OK;
 
 failed:
 

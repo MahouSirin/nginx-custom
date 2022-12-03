@@ -10,11 +10,9 @@
 #include <ngx_http.h>
 
 
-#if (NGX_HTTP_V3_HQ)
-static void ngx_http_v3_init_hq_stream(ngx_connection_t *c);
-#endif
 static void ngx_http_v3_init_request_stream(ngx_connection_t *c);
 static void ngx_http_v3_wait_request_handler(ngx_event_t *rev);
+static void ngx_http_v3_cleanup_connection(void *data);
 static void ngx_http_v3_cleanup_request(void *data);
 static void ngx_http_v3_process_request(ngx_event_t *rev);
 static ngx_int_t ngx_http_v3_process_header(ngx_http_request_t *r,
@@ -58,20 +56,31 @@ static const struct {
 
 
 void
-ngx_http_v3_init(ngx_connection_t *c)
+ngx_http_v3_init_stream(ngx_connection_t *c)
 {
+    ngx_http_v3_session_t     *h3c;
     ngx_http_connection_t     *hc, *phc;
     ngx_http_v3_srv_conf_t    *h3scf;
     ngx_http_core_loc_conf_t  *clcf;
+    ngx_http_core_srv_conf_t  *cscf;
 
     hc = c->data;
 
     hc->ssl = 1;
 
     clcf = ngx_http_get_module_loc_conf(hc->conf_ctx, ngx_http_core_module);
+    cscf = ngx_http_get_module_srv_conf(hc->conf_ctx, ngx_http_core_module);
     h3scf = ngx_http_get_module_srv_conf(hc->conf_ctx, ngx_http_v3_module);
 
     if (c->quic == NULL) {
+        if (ngx_http_v3_init_session(c) != NGX_OK) {
+            ngx_http_close_connection(c);
+            return;
+        }
+
+        h3c = hc->v3_session;
+        ngx_add_timer(&h3c->keepalive, cscf->client_header_timeout);
+
         h3scf->quic.timeout = clcf->keepalive_timeout;
         ngx_quic_run(c, &h3scf->quic);
         return;
@@ -89,18 +98,6 @@ ngx_http_v3_init(ngx_connection_t *c)
         ngx_set_connection_log(c, clcf->error_log);
     }
 
-#if (NGX_HTTP_V3_HQ)
-    if (h3scf->hq) {
-        ngx_http_v3_init_hq_stream(c);
-        return;
-    }
-#endif
-
-    if (ngx_http_v3_init_session(c) != NGX_OK) {
-        ngx_http_close_connection(c);
-        return;
-    }
-
     if (c->quic->id & NGX_QUIC_STREAM_UNIDIRECTIONAL) {
         ngx_http_v3_init_uni_stream(c);
 
@@ -110,76 +107,57 @@ ngx_http_v3_init(ngx_connection_t *c)
 }
 
 
-#if (NGX_HTTP_V3_HQ)
-
-static void
-ngx_http_v3_init_hq_stream(ngx_connection_t *c)
+ngx_int_t
+ngx_http_v3_init(ngx_connection_t *c)
 {
-    uint64_t                   n;
-    ngx_event_t               *rev;
-    ngx_http_connection_t     *hc;
+    ngx_http_v3_session_t     *h3c;
     ngx_http_core_loc_conf_t  *clcf;
-    ngx_http_core_srv_conf_t  *cscf;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 init hq stream");
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 init");
 
-#if (NGX_STAT_STUB)
-    (void) ngx_atomic_fetch_add(ngx_stat_active, 1);
+    h3c = ngx_http_v3_get_session(c);
+    clcf = ngx_http_v3_get_module_loc_conf(c, ngx_http_core_module);
+    ngx_add_timer(&h3c->keepalive, clcf->keepalive_timeout);
+
+#if (NGX_HTTP_V3_HQ)
+    if (h3c->hq) {
+        return NGX_OK;
+    }
 #endif
 
-    hc = c->data;
-
-    /* Use HTTP/3 General Protocol Error Code 0x101 for finalization */
-
-    if (c->quic->id & NGX_QUIC_STREAM_UNIDIRECTIONAL) {
-        ngx_quic_finalize_connection(c->quic->parent,
-                                     NGX_HTTP_V3_ERR_GENERAL_PROTOCOL_ERROR,
-                                     "unexpected uni stream");
-        ngx_http_close_connection(c);
-        return;
-    }
-
-    clcf = ngx_http_get_module_loc_conf(hc->conf_ctx, ngx_http_core_module);
-
-    n = c->quic->id >> 2;
-
-    if (n >= clcf->keepalive_requests) {
-        ngx_quic_finalize_connection(c->quic->parent,
-                                     NGX_HTTP_V3_ERR_GENERAL_PROTOCOL_ERROR,
-                                     "reached maximum number of requests");
-        ngx_http_close_connection(c);
-        return;
-    }
-
-    if (ngx_current_msec - c->quic->parent->start_time
-        > clcf->keepalive_time)
-    {
-        ngx_quic_finalize_connection(c->quic->parent,
-                                     NGX_HTTP_V3_ERR_GENERAL_PROTOCOL_ERROR,
-                                     "reached maximum time for requests");
-        ngx_http_close_connection(c);
-        return;
-    }
-
-    rev = c->read;
-
-    if (rev->ready) {
-        rev->handler(rev);
-        return;
-    }
-
-    cscf = ngx_http_get_module_srv_conf(hc->conf_ctx, ngx_http_core_module);
-
-    ngx_add_timer(rev, cscf->client_header_timeout);
-    ngx_reusable_connection(c, 1);
-
-    if (ngx_handle_read_event(rev, 0) != NGX_OK) {
-        ngx_http_close_connection(c);
-        return;
-    }
+    return ngx_http_v3_send_settings(c);
 }
 
+
+void
+ngx_http_v3_shutdown(ngx_connection_t *c)
+{
+    ngx_http_v3_session_t  *h3c;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 shutdown");
+
+    h3c = ngx_http_v3_get_session(c);
+
+    if (h3c == NULL) {
+        ngx_quic_finalize_connection(c, NGX_HTTP_V3_ERR_NO_ERROR,
+                                     "connection shutdown");
+        return;
+    }
+
+    if (!h3c->goaway) {
+        h3c->goaway = 1;
+
+#if (NGX_HTTP_V3_HQ)
+        if (!h3c->hq)
 #endif
+        {
+            (void) ngx_http_v3_send_goaway(c, h3c->next_request_id);
+        }
+
+        ngx_http_v3_shutdown_connection(c, NGX_HTTP_V3_ERR_NO_ERROR,
+                                        "connection shutdown");
+    }
+}
 
 
 static void
@@ -187,6 +165,8 @@ ngx_http_v3_init_request_stream(ngx_connection_t *c)
 {
     uint64_t                   n;
     ngx_event_t               *rev;
+    ngx_connection_t          *pc;
+    ngx_pool_cleanup_t        *cln;
     ngx_http_connection_t     *hc;
     ngx_http_v3_session_t     *h3c;
     ngx_http_core_loc_conf_t  *clcf;
@@ -219,24 +199,53 @@ ngx_http_v3_init_request_stream(ngx_connection_t *c)
         return;
     }
 
+    pc = c->quic->parent;
+
+    h3c->next_request_id = c->quic->id + 0x04;
+
     if (n + 1 == clcf->keepalive_requests
-        || ngx_current_msec - c->quic->parent->start_time
-           > clcf->keepalive_time)
+        || ngx_current_msec - pc->start_time > clcf->keepalive_time)
     {
         h3c->goaway = 1;
 
-        if (ngx_http_v3_send_goaway(c, (n + 1) << 2) != NGX_OK) {
-            ngx_http_close_connection(c);
-            return;
+#if (NGX_HTTP_V3_HQ)
+        if (!h3c->hq)
+#endif
+        {
+            if (ngx_http_v3_send_goaway(c, h3c->next_request_id) != NGX_OK) {
+                ngx_http_close_connection(c);
+                return;
+            }
         }
 
         ngx_http_v3_shutdown_connection(c, NGX_HTTP_V3_ERR_NO_ERROR,
                                         "reached maximum number of requests");
     }
 
+    cln = ngx_pool_cleanup_add(c->pool, 0);
+    if (cln == NULL) {
+        ngx_http_close_connection(c);
+        return;
+    }
+
+    cln->handler = ngx_http_v3_cleanup_connection;
+    cln->data = c;
+
+    h3c->nrequests++;
+
+    if (h3c->keepalive.timer_set) {
+        ngx_del_timer(&h3c->keepalive);
+    }
+
     rev = c->read;
-    rev->handler = ngx_http_v3_wait_request_handler;
-    c->write->handler = ngx_http_empty_handler;
+
+#if (NGX_HTTP_V3_HQ)
+    if (!h3c->hq)
+#endif
+    {
+        rev->handler = ngx_http_v3_wait_request_handler;
+        c->write->handler = ngx_http_empty_handler;
+    }
 
     if (rev->ready) {
         rev->handler(rev);
@@ -265,7 +274,6 @@ ngx_http_v3_wait_request_handler(ngx_event_t *rev)
     ngx_pool_cleanup_t        *cln;
     ngx_http_request_t        *r;
     ngx_http_connection_t     *hc;
-    ngx_http_v3_session_t     *h3c;
     ngx_http_core_srv_conf_t  *cscf;
 
     c = rev->data;
@@ -385,32 +393,22 @@ ngx_http_v3_wait_request_handler(ngx_event_t *rev)
     cln->handler = ngx_http_v3_cleanup_request;
     cln->data = r;
 
-    h3c = ngx_http_v3_get_session(c);
-    h3c->nrequests++;
-
-    if (h3c->keepalive.timer_set) {
-        ngx_del_timer(&h3c->keepalive);
-    }
-
     rev->handler = ngx_http_v3_process_request;
     ngx_http_v3_process_request(rev);
 }
 
 
 void
-ngx_http_v3_reset_connection(ngx_connection_t *c)
+ngx_http_v3_reset_stream(ngx_connection_t *c)
 {
     ngx_http_v3_srv_conf_t  *h3scf;
 
     h3scf = ngx_http_v3_get_module_srv_conf(c, ngx_http_v3_module);
 
-#if (NGX_HTTP_V3_HQ)
-    if (h3scf->hq) {
-        return;
-    }
-#endif
-
     if (h3scf->max_table_capacity > 0 && !c->read->eof
+#if (NGX_HTTP_V3_HQ)
+        && !h3scf->hq
+#endif
         && (c->quic->id & NGX_QUIC_STREAM_UNIDIRECTIONAL) == 0)
     {
         (void) ngx_http_v3_send_cancel_stream(c, c->quic->id);
@@ -429,25 +427,29 @@ ngx_http_v3_reset_connection(ngx_connection_t *c)
 
 
 static void
-ngx_http_v3_cleanup_request(void *data)
+ngx_http_v3_cleanup_connection(void *data)
 {
-    ngx_http_request_t  *r = data;
+    ngx_connection_t  *c = data;
 
-    ngx_connection_t          *c;
     ngx_http_v3_session_t     *h3c;
     ngx_http_core_loc_conf_t  *clcf;
-
-    c = r->connection;
-
-    if (!r->response_sent) {
-        c->error = 1;
-    }
 
     h3c = ngx_http_v3_get_session(c);
 
     if (--h3c->nrequests == 0) {
         clcf = ngx_http_v3_get_module_loc_conf(c, ngx_http_core_module);
         ngx_add_timer(&h3c->keepalive, clcf->keepalive_timeout);
+    }
+}
+
+
+static void
+ngx_http_v3_cleanup_request(void *data)
+{
+    ngx_http_request_t  *r = data;
+
+    if (!r->response_sent) {
+        r->connection->error = 1;
     }
 }
 

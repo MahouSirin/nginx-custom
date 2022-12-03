@@ -37,7 +37,22 @@ void
 ngx_http_v3_init_uni_stream(ngx_connection_t *c)
 {
     uint64_t                   n;
+#if (NGX_HTTP_V3_HQ)
+    ngx_http_v3_session_t     *h3c;
+#endif
     ngx_http_v3_uni_stream_t  *us;
+
+#if (NGX_HTTP_V3_HQ)
+    h3c = ngx_http_v3_get_session(c);
+    if (h3c->hq) {
+        ngx_http_v3_finalize_connection(c,
+                                        NGX_HTTP_V3_ERR_STREAM_CREATION_ERROR,
+                                        "uni stream in hq mode");
+        c->data = NULL;
+        ngx_http_v3_close_uni_stream(c);
+        return;
+    }
+#endif
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 init uni stream");
 
@@ -52,7 +67,7 @@ ngx_http_v3_init_uni_stream(ngx_connection_t *c)
         return;
     }
 
-    c->quic->cancelable = 1;
+    ngx_quic_cancelable_stream(c);
 
     us = ngx_pcalloc(c->pool, sizeof(ngx_http_v3_uni_stream_t));
     if (us == NULL) {
@@ -182,6 +197,11 @@ ngx_http_v3_uni_read_handler(ngx_event_t *rev)
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 read handler");
 
+    if (c->close) {
+        ngx_http_v3_close_uni_stream(c);
+        return;
+    }
+
     ngx_memzero(&b, sizeof(ngx_buf_t));
 
     while (rev->ready) {
@@ -261,6 +281,11 @@ ngx_http_v3_uni_dummy_read_handler(ngx_event_t *rev)
     c = rev->data;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0, "http3 dummy read handler");
+
+    if (c->close) {
+        ngx_http_v3_close_uni_stream(c);
+        return;
+    }
 
     if (rev->ready) {
         if (c->recv(c, &ch, 1) != 0) {
@@ -404,7 +429,7 @@ ngx_http_v3_get_uni_stream(ngx_connection_t *c, ngx_uint_t type)
         goto failed;
     }
 
-    sc->quic->cancelable = 1;
+    ngx_quic_cancelable_stream(sc);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http3 create uni stream, type:%ui", type);
