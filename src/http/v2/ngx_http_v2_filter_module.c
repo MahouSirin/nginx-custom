@@ -476,7 +476,7 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
                            NGINX_VER_BUILD);
 
         } else {
-            ngx_log_debug0(NGX_LOG_DEBUG_HTTP, fc->log, 0,
+            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
                            "http2 output header: \"server: %s\"",
                            NGINX_SERVER);
         }
