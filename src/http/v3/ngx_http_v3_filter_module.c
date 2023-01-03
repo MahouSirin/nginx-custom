@@ -185,7 +185,7 @@ ngx_http_v3_header_filter(ngx_http_request_t *r)
             n = sizeof(NGINX_VER_BUILD) - 1;
 
         } else {
-            n = sizeof("nginx") - 1;
+            n = sizeof("raiden") - 1;
         }
 
         len += ngx_http_v3_encode_field_lri(NULL, 0,

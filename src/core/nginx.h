@@ -9,8 +9,8 @@
 #define _NGINX_H_INCLUDED_
 
 
-#define nginx_version      1023002
-#define NGINX_VERSION      "1.23.2"
+#define nginx_version      1023004
+#define NGINX_VERSION      "1.23.4"
 #define NGINX_VER          "raiden/" NGINX_VERSION
 
 #ifndef NGINX_SERVER
