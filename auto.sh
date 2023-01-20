@@ -83,21 +83,23 @@ fi
 
 ### Build BoringSSL
 ### Use ninja-build for performance
-cd lib/boringssl
-mkdir build
-cd build
-cmake -GNinja ..
-ninja
-cd ..
-### Make symlink to './include' with OpenSSL Library
-mkdir -p .openssl/lib
-cd .openssl
-ln -s ../include include
-cd ..
-### Copy BoringSSL's crypto libraries to OpenSSL Library directory
-cp build/crypto/libcrypto.a .openssl/lib
-cp build/ssl/libssl.a .openssl/lib
-cd ../..
+if [ ! -d "lib/boringssl/build" ]; then
+    cd lib/boringssl
+    mkdir build
+    cd build
+    cmake -GNinja ..
+    ninja
+    cd ..
+    ### Make symlink to './include' with OpenSSL Library
+    mkdir -p .openssl/lib
+    cd .openssl
+    ln -s ../include include
+    cd ..
+    ### Copy BoringSSL's crypto libraries to OpenSSL Library directory
+    cp build/crypto/libcrypto.a .openssl/lib
+    cp build/ssl/libssl.a .openssl/lib
+    cd ../..
+fi
 
 ### Temporary Ubuntu/Debian build error (libxslt/libxml2)
 ### URL : https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=721602

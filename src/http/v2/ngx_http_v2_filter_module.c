@@ -148,7 +148,6 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
     ngx_http_core_srv_conf_t  *cscf;
     u_char                     addr[NGX_SOCKADDR_STRLEN];
 
-    static const u_char nginx[5] = "\x84\xaa\x63\x55\xe7";
 #if (NGX_HTTP_GZIP)
     static const u_char accept_encoding[12] =
         "\x8b\x84\x84\x2d\x69\x5b\x05\x44\x3c\x86\xaa\x6f";
@@ -507,7 +506,7 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
             if (nginx_ver[0] == '\0') {
                 p = ngx_http_v2_write_value(nginx_server, (u_char *) NGINX_SERVER,
                                             sizeof(NGINX_SERVER) - 1, tmp);
-                nginx_server_len = p - NGINX_SERVER;
+                nginx_server_len = p - nginx_server;
             }
 
             pos = ngx_cpymem(pos, nginx_server, nginx_server_len);
