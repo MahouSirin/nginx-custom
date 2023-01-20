@@ -165,7 +165,6 @@ ngx_http_v3_init_request_stream(ngx_connection_t *c)
 {
     uint64_t                   n;
     ngx_event_t               *rev;
-    ngx_connection_t          *pc;
     ngx_pool_cleanup_t        *cln;
     ngx_http_connection_t     *hc;
     ngx_http_v3_session_t     *h3c;
@@ -199,12 +198,10 @@ ngx_http_v3_init_request_stream(ngx_connection_t *c)
         return;
     }
 
-    pc = c->quic->parent;
-
     h3c->next_request_id = c->quic->id + 0x04;
 
     if (n + 1 == clcf->keepalive_requests
-        || ngx_current_msec - pc->start_time > clcf->keepalive_time)
+        || ngx_current_msec - c->start_time > clcf->keepalive_time)
     {
         h3c->goaway = 1;
 
@@ -554,8 +551,14 @@ ngx_http_v3_process_request(ngx_event_t *rev)
 
         if (rc == NGX_BUSY) {
             if (rev->error) {
-                ngx_http_close_request(r, NGX_HTTP_CLOSE);
+                ngx_http_finalize_request(r, NGX_HTTP_BAD_REQUEST);
                 break;
+            }
+
+            if (!rev->timer_set) {
+                cscf = ngx_http_get_module_srv_conf(r,
+                                                    ngx_http_core_module);
+                ngx_add_timer(rev, cscf->client_header_timeout);
             }
 
             if (ngx_handle_read_event(rev, 0) != NGX_OK) {
