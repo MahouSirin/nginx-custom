@@ -387,6 +387,39 @@ ngx_quic_split_frame(ngx_connection_t *c, ngx_quic_frame_t *f, size_t len)
 
 
 ngx_chain_t *
+ngx_quic_copy_buffer(ngx_connection_t *c, u_char *data, size_t len)
+{
+    ngx_buf_t          buf;
+    ngx_chain_t        cl, *out;
+    ngx_quic_buffer_t  qb;
+
+    ngx_memzero(&buf, sizeof(ngx_buf_t));
+
+    buf.pos = data;
+    buf.last = buf.pos + len;
+    buf.temporary = 1;
+
+    cl.buf = &buf;
+    cl.next = NULL;
+
+    ngx_memzero(&qb, sizeof(ngx_quic_buffer_t));
+
+    if (ngx_quic_write_buffer(c, &qb, &cl, len, 0) == NGX_CHAIN_ERROR) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    out = ngx_quic_read_buffer(c, &qb, len);
+    if (out == NGX_CHAIN_ERROR) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    ngx_quic_free_buffer(c, &qb);
+
+    return out;
+}
+
+
+ngx_chain_t *
 ngx_quic_read_buffer(ngx_connection_t *c, ngx_quic_buffer_t *qb, uint64_t limit)
 {
     uint64_t      n;
@@ -825,6 +858,20 @@ ngx_quic_log_frame(ngx_log_t *log, ngx_quic_frame_t *f, ngx_uint_t tx)
 
     case NGX_QUIC_FT_NEW_TOKEN:
         p = ngx_slprintf(p, last, "NEW_TOKEN");
+
+#ifdef NGX_QUIC_DEBUG_FRAMES
+        {
+            ngx_chain_t  *cl;
+
+            p = ngx_slprintf(p, last, " token:");
+
+            for (cl = f->data; cl; cl = cl->next) {
+                p = ngx_slprintf(p, last, "%*xs",
+                                 cl->buf->last - cl->buf->pos, cl->buf->pos);
+            }
+        }
+#endif
+
         break;
 
     case NGX_QUIC_FT_HANDSHAKE_DONE:
