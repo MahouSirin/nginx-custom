@@ -4191,12 +4191,29 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
         if (ngx_strcmp(value[n].data, "http3") == 0) {
 #if (NGX_HTTP_V3)
+            ngx_conf_log_error(NGX_LOG_WARN, cf, 0,
+                               "the \"http3\" parameter is deprecated, "
+                               "use \"quic\" parameter instead");
+            lsopt.quic = 1;
             lsopt.http3 = 1;
             lsopt.type = SOCK_DGRAM;
             continue;
 #else
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                                "the \"http3\" parameter requires "
+                               "ngx_http_v3_module");
+            return NGX_CONF_ERROR;
+#endif
+        }
+
+        if (ngx_strcmp(value[n].data, "quic") == 0) {
+#if (NGX_HTTP_V3)
+            lsopt.quic = 1;
+            lsopt.type = SOCK_DGRAM;
+            continue;
+#else
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "the \"quic\" parameter requires "
                                "ngx_http_v3_module");
             return NGX_CONF_ERROR;
 #endif
@@ -4303,10 +4320,26 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
-#if (NGX_HTTP_SSL && NGX_HTTP_V3)
-    if (lsopt.ssl && lsopt.http3) {
-        return "\"ssl\" parameter is incompatible with \"http3\"";
+#if (NGX_HTTP_V3)
+
+    if (lsopt.quic) {
+#if (NGX_HTTP_SSL)
+        if (lsopt.ssl) {
+            return "\"ssl\" parameter is incompatible with \"quic\"";
+        }
+#endif
+
+#if (NGX_HTTP_V2)
+        if (lsopt.http2) {
+            return "\"http2\" parameter is incompatible with \"quic\"";
+        }
+#endif
+
+        if (lsopt.proxy_protocol) {
+            return "\"proxy_protocol\" parameter is incompatible with \"quic\"";
+        }
     }
+
 #endif
 
     for (n = 0; n < u.naddrs; n++) {

@@ -224,6 +224,13 @@ static char ngx_http_error_416_page[] =
 "<center><h1>416 Requested Range Not Satisfiable</h1></center>" CRLF
 ;
 
+static char ngx_http_error_418_page[] =
+"<html>" CRLF
+"<head><title>418 I'm a teapot</title></head>" CRLF
+"<body>" CRLF
+"<center><h1>418 I'm a teapot</h1></center>" CRLF
+;
+
 
 static char ngx_http_error_421_page[] =
 "<html>" CRLF
@@ -375,7 +382,7 @@ static ngx_str_t ngx_http_error_pages[] = {
     ngx_string(ngx_http_error_415_page),
     ngx_string(ngx_http_error_416_page),
     ngx_null_string,                     /* 417 */
-    ngx_null_string,                     /* 418 */
+    ngx_string(ngx_http_error_418_page),
     ngx_null_string,                     /* 419 */
     ngx_null_string,                     /* 420 */
     ngx_string(ngx_http_error_421_page),

@@ -10,6 +10,13 @@
 #include <ngx_event_quic_connection.h>
 
 
+#if defined OPENSSL_IS_BORINGSSL                                              \
+    || defined LIBRESSL_VERSION_NUMBER                                        \
+    || NGX_QUIC_OPENSSL_COMPAT
+#define NGX_QUIC_BORINGSSL_API   1
+#endif
+
+
 /*
  * RFC 9000, 7.5.  Cryptographic Message Buffering
  *
@@ -18,7 +25,7 @@
 #define NGX_QUIC_MAX_BUFFERED    65535
 
 
-#if defined OPENSSL_IS_BORINGSSL || defined LIBRESSL_VERSION_NUMBER
+#if (NGX_QUIC_BORINGSSL_API)
 static int ngx_quic_set_read_secret(ngx_ssl_conn_t *ssl_conn,
     enum ssl_encryption_level_t level, const SSL_CIPHER *cipher,
     const uint8_t *secret, size_t secret_len);
@@ -39,7 +46,7 @@ static int ngx_quic_send_alert(ngx_ssl_conn_t *ssl_conn,
 static ngx_int_t ngx_quic_crypto_input(ngx_connection_t *c, ngx_chain_t *data);
 
 
-#if defined OPENSSL_IS_BORINGSSL || defined LIBRESSL_VERSION_NUMBER
+#if (NGX_QUIC_BORINGSSL_API)
 
 static int
 ngx_quic_set_read_secret(ngx_ssl_conn_t *ssl_conn,
@@ -190,7 +197,7 @@ ngx_quic_add_handshake_data(ngx_ssl_conn_t *ssl_conn,
         SSL_get0_alpn_selected(ssl_conn, &alpn_data, &alpn_len);
 
         if (alpn_len == 0) {
-            qc->error = 0x100 + SSL_AD_NO_APPLICATION_PROTOCOL;
+            qc->error = NGX_QUIC_ERR_CRYPTO(SSL_AD_NO_APPLICATION_PROTOCOL);
             qc->error_reason = "unsupported protocol in ALPN extension";
 
             ngx_log_error(NGX_LOG_INFO, c->log, 0,
@@ -301,6 +308,7 @@ ngx_quic_send_alert(ngx_ssl_conn_t *ssl_conn, enum ssl_encryption_level_t level,
     }
 
     qc->error = NGX_QUIC_ERR_CRYPTO(alert);
+    qc->error_reason = "handshake failed";
 
     return 1;
 }
@@ -422,8 +430,15 @@ ngx_quic_crypto_input(ngx_connection_t *c, ngx_chain_t *data)
                        sslerr);
 
         if (sslerr != SSL_ERROR_WANT_READ) {
+
+            if (c->ssl->handshake_rejected) {
+                ngx_connection_error(c, 0, "handshake rejected");
+                ERR_clear_error();
+
+                return NGX_ERROR;
+            }
+
             ngx_ssl_error(NGX_LOG_ERR, c->log, 0, "SSL_do_handshake() failed");
-            qc->error_reason = "handshake failed";
             return NGX_ERROR;
         }
     }
@@ -440,11 +455,9 @@ ngx_quic_crypto_input(ngx_connection_t *c, ngx_chain_t *data)
         return NGX_OK;
     }
 
-    ngx_log_debug1(NGX_LOG_DEBUG_EVENT, c->log, 0,
-                   "quic ssl cipher:%s", SSL_get_cipher(ssl_conn));
-
-    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
-                   "quic handshake completed successfully");
+#if (NGX_DEBUG)
+    ngx_ssl_handshake_log(c);
+#endif
 
     c->ssl->handshaked = 1;
 
@@ -517,7 +530,7 @@ ngx_quic_init_connection(ngx_connection_t *c)
     ssl_conn = c->ssl->connection;
 
     if (!quic_method.send_alert) {
-#if defined OPENSSL_IS_BORINGSSL || defined LIBRESSL_VERSION_NUMBER
+#if (NGX_QUIC_BORINGSSL_API)
         quic_method.set_read_secret = ngx_quic_set_read_secret;
         quic_method.set_write_secret = ngx_quic_set_write_secret;
 #else

@@ -30,13 +30,13 @@ LTO=0
 ### Enter 0 for the module that is not to be used.
 
 ### nginx-http-flv-module
-FLV=1
+FLV=0
 
 ### naxsi
-NAXSI=1
+NAXSI=0
 
 ### nginx-dav-ext-module
-DAV_EXT=1
+DAV_EXT=0
 
 ### fancyindex
 FANCYINDEX=1
@@ -45,7 +45,7 @@ FANCYINDEX=1
 GEOIP2=1
 
 ### nginx-module-vts
-VTS=1
+VTS=0
 
 ##########################
 ### nginx install path ###
