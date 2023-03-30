@@ -56,6 +56,10 @@ static char *ngx_http_ssl_conf_command_check(ngx_conf_t *cf, void *post,
     void *data);
 
 static ngx_int_t ngx_http_ssl_init(ngx_conf_t *cf);
+#if (NGX_QUIC_OPENSSL_COMPAT)
+static ngx_int_t ngx_http_ssl_quic_compat_init(ngx_conf_t *cf,
+    ngx_http_conf_addr_t *addr);
+#endif
 
 
 static ngx_conf_bitmask_t  ngx_http_ssl_protocols[] = {
@@ -666,8 +670,9 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->reject_handshake, prev->reject_handshake, 0);
 
     ngx_conf_merge_bitmask_value(conf->protocols, prev->protocols,
-                         (NGX_CONF_BITMASK_SET|NGX_SSL_TLSv1
-                          |NGX_SSL_TLSv1_1|NGX_SSL_TLSv1_2));
+                         (NGX_CONF_BITMASK_SET
+                          |NGX_SSL_TLSv1|NGX_SSL_TLSv1_1
+                          |NGX_SSL_TLSv1_2|NGX_SSL_TLSv1_3));
 
     ngx_conf_merge_size_value(conf->buffer_size, prev->buffer_size,
                          NGX_SSL_BUFSIZE);
@@ -1328,14 +1333,11 @@ ngx_http_ssl_init(ngx_conf_t *cf)
                 continue;
             }
 
-            cscf = addr[a].default_server;
-            sscf = cscf->ctx->srv_conf[ngx_http_ssl_module.ctx_index];
-
             if (addr[a].opt.quic) {
                 name = "quic";
 
 #if (NGX_QUIC_OPENSSL_COMPAT)
-                if (ngx_quic_compat_init(cf, sscf->ssl.ctx) != NGX_OK) {
+                if (ngx_http_ssl_quic_compat_init(cf, &addr[a]) != NGX_OK) {
                     return NGX_ERROR;
                 }
 #endif
@@ -1343,6 +1345,9 @@ ngx_http_ssl_init(ngx_conf_t *cf)
             } else {
                 name = "ssl";
             }
+
+            cscf = addr[a].default_server;
+            sscf = cscf->ctx->srv_conf[ngx_http_ssl_module.ctx_index];
 
             if (sscf->certificates) {
 
@@ -1391,3 +1396,31 @@ ngx_http_ssl_init(ngx_conf_t *cf)
 
     return NGX_OK;
 }
+
+
+#if (NGX_QUIC_OPENSSL_COMPAT)
+
+static ngx_int_t
+ngx_http_ssl_quic_compat_init(ngx_conf_t *cf, ngx_http_conf_addr_t *addr)
+{
+    ngx_uint_t                  s;
+    ngx_http_ssl_srv_conf_t    *sscf;
+    ngx_http_core_srv_conf_t  **cscfp, *cscf;
+
+    cscfp = addr->servers.elts;
+    for (s = 0; s < addr->servers.nelts; s++) {
+
+        cscf = cscfp[s];
+        sscf = cscf->ctx->srv_conf[ngx_http_ssl_module.ctx_index];
+
+        if (sscf->certificates || sscf->reject_handshake) {
+            if (ngx_quic_compat_init(cf, sscf->ssl.ctx) != NGX_OK) {
+                return NGX_ERROR;
+            }
+        }
+    }
+
+    return NGX_OK;
+}
+
+#endif
