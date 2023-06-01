@@ -157,7 +157,6 @@ auto/configure \
 --with-mail_ssl_module \
 --with-http_v2_module \
 --with-http_v3_module \
---with-stream_quic_module \
 --with-stream_ssl_module \
 --with-stream_realip_module \
 --with-stream_ssl_preread_module \

@@ -34,7 +34,7 @@ ngx_quic_recvmsg(ngx_event_t *ev)
     ngx_event_conf_t   *ecf;
     ngx_connection_t   *c, *lc;
     ngx_quic_socket_t  *qsock;
-    static u_char       buffer[65535];
+    static u_char       buffer[NGX_QUIC_MAX_UDP_PAYLOAD_SIZE];
 
 #if (NGX_HAVE_ADDRINFO_CMSG)
     u_char             msg_control[CMSG_SPACE(sizeof(ngx_addrinfo_t))];
@@ -183,7 +183,7 @@ ngx_quic_recvmsg(ngx_event_t *ev)
 
             qsock = ngx_quic_get_socket(c);
 
-            ngx_memcpy(&qsock->sockaddr.sockaddr, sockaddr, socklen);
+            ngx_memcpy(&qsock->sockaddr, sockaddr, socklen);
             qsock->socklen = socklen;
 
             c->udp->buffer = &buf;
@@ -362,59 +362,6 @@ ngx_quic_close_accepted_connection(ngx_connection_t *c)
 #if (NGX_STAT_STUB)
     (void) ngx_atomic_fetch_add(ngx_stat_active, -1);
 #endif
-}
-
-
-void
-ngx_quic_rbtree_insert_value(ngx_rbtree_node_t *temp,
-    ngx_rbtree_node_t *node, ngx_rbtree_node_t *sentinel)
-{
-    ngx_int_t            rc;
-    ngx_connection_t    *c, *ct;
-    ngx_rbtree_node_t  **p;
-    ngx_quic_socket_t   *qsock, *qsockt;
-
-    for ( ;; ) {
-
-        if (node->key < temp->key) {
-
-            p = &temp->left;
-
-        } else if (node->key > temp->key) {
-
-            p = &temp->right;
-
-        } else { /* node->key == temp->key */
-
-            qsock = (ngx_quic_socket_t *) node;
-            c = qsock->udp.connection;
-
-            qsockt = (ngx_quic_socket_t *) temp;
-            ct = qsockt->udp.connection;
-
-            rc = ngx_memn2cmp(qsock->sid.id, qsockt->sid.id,
-                              qsock->sid.len, qsockt->sid.len);
-
-            if (rc == 0 && c->listening->wildcard) {
-                rc = ngx_cmp_sockaddr(c->local_sockaddr, c->local_socklen,
-                                      ct->local_sockaddr, ct->local_socklen, 1);
-            }
-
-            p = (rc < 0) ? &temp->left : &temp->right;
-        }
-
-        if (*p == sentinel) {
-            break;
-        }
-
-        temp = *p;
-    }
-
-    *p = node;
-    node->parent = temp;
-    node->left = sentinel;
-    node->right = sentinel;
-    ngx_rbt_red(node);
 }
 
 

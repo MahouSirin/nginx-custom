@@ -637,10 +637,12 @@ ngx_quic_do_init_streams(ngx_connection_t *c)
 static ngx_quic_stream_t *
 ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
 {
+    ngx_str_t               addr_text;
     ngx_log_t              *log;
     ngx_pool_t             *pool;
     ngx_uint_t              reusable;
     ngx_queue_t            *q;
+    struct sockaddr        *sockaddr;
     ngx_connection_t       *sc;
     ngx_quic_stream_t      *qs;
     ngx_pool_cleanup_t     *cln;
@@ -692,6 +694,31 @@ ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
     *log = *c->log;
     pool->log = log;
 
+    sockaddr = ngx_palloc(pool, c->socklen);
+    if (sockaddr == NULL) {
+        ngx_destroy_pool(pool);
+        ngx_queue_insert_tail(&qc->streams.free, &qs->queue);
+        return NULL;
+    }
+
+    ngx_memcpy(sockaddr, c->sockaddr, c->socklen);
+
+    if (c->addr_text.data) {
+        addr_text.data = ngx_pnalloc(pool, c->addr_text.len);
+        if (addr_text.data == NULL) {
+            ngx_destroy_pool(pool);
+            ngx_queue_insert_tail(&qc->streams.free, &qs->queue);
+            return NULL;
+        }
+
+        ngx_memcpy(addr_text.data, c->addr_text.data, c->addr_text.len);
+        addr_text.len = c->addr_text.len;
+
+    } else {
+        addr_text.len = 0;
+        addr_text.data = NULL;
+    }
+
     reusable = c->reusable;
     ngx_reusable_connection(c, 0);
 
@@ -710,9 +737,10 @@ ngx_quic_create_stream(ngx_connection_t *c, uint64_t id)
     sc->type = SOCK_STREAM;
     sc->pool = pool;
     sc->ssl = c->ssl;
-    sc->sockaddr = c->sockaddr;
+    sc->sockaddr = sockaddr;
+    sc->socklen = c->socklen;
     sc->listening = c->listening;
-    sc->addr_text = c->addr_text;
+    sc->addr_text = addr_text;
     sc->local_sockaddr = c->local_sockaddr;
     sc->local_socklen = c->local_socklen;
     sc->number = ngx_atomic_fetch_add(ngx_connection_counter, 1);
@@ -1056,7 +1084,8 @@ ngx_quic_stream_cleanup_handler(void *data)
 {
     ngx_connection_t *c = data;
 
-    ngx_quic_stream_t  *qs;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
 
     qs = c->quic;
 
@@ -1064,16 +1093,23 @@ ngx_quic_stream_cleanup_handler(void *data)
                    "quic stream id:0x%xL cleanup", qs->id);
 
     if (ngx_quic_shutdown_stream(c, NGX_RDWR_SHUTDOWN) != NGX_OK) {
-        ngx_quic_close_connection(c, NGX_ERROR);
-        return;
+        goto failed;
     }
 
     qs->connection = NULL;
 
     if (ngx_quic_close_stream(qs) != NGX_OK) {
-        ngx_quic_close_connection(c, NGX_ERROR);
-        return;
+        goto failed;
     }
+
+    return;
+
+failed:
+
+    qc = ngx_quic_get_connection(qs->parent);
+    qc->error = NGX_QUIC_ERR_INTERNAL_ERROR;
+
+    ngx_post_event(&qc->close, &ngx_posted_events);
 }
 
 

@@ -85,11 +85,11 @@
 #define ngx_http_v3_get_session(c)  ngx_http_quic_get_connection(c)->v3_session
 
 #define ngx_http_v3_get_module_loc_conf(c, module)                            \
-    ngx_http_get_module_loc_conf(ngx_http_quic_get_connection(c)->conf_ctx,     \
+    ngx_http_get_module_loc_conf(ngx_http_quic_get_connection(c)->conf_ctx,   \
                                  module)
 
 #define ngx_http_v3_get_module_srv_conf(c, module)                            \
-    ngx_http_get_module_srv_conf(ngx_http_quic_get_connection(c)->conf_ctx,     \
+    ngx_http_get_module_srv_conf(ngx_http_quic_get_connection(c)->conf_ctx,   \
                                  module)
 
 #define ngx_http_v3_finalize_connection(c, code, reason)                      \
@@ -106,17 +106,9 @@ typedef struct {
     ngx_flag_t                    enable_hq;
     size_t                        max_table_capacity;
     ngx_uint_t                    max_blocked_streams;
-    ngx_uint_t                    max_concurrent_pushes;
     ngx_uint_t                    max_concurrent_streams;
     ngx_quic_conf_t               quic;
 } ngx_http_v3_srv_conf_t;
-
-
-typedef struct {
-    ngx_flag_t                    push_preload;
-    ngx_flag_t                    push;
-    ngx_array_t                  *pushes;
-} ngx_http_v3_loc_conf_t;
 
 
 struct ngx_http_v3_parse_s {
@@ -136,11 +128,6 @@ struct ngx_http_v3_session_s {
     ngx_queue_t                   blocked;
     ngx_uint_t                    nblocked;
 
-    ngx_queue_t                   pushing;
-    ngx_uint_t                    npushing;
-    uint64_t                      next_push_id;
-    uint64_t                      max_push_id;
-    uint64_t                      goaway_push_id;
     uint64_t                      next_request_id;
 
     off_t                         total_bytes;
