@@ -26,9 +26,9 @@
 [submodule "lib/ngx_brotli"]
 	path = lib/ngx_brotli
 	url = https://github.com/google/ngx_brotli.git
-[submodule "lib/boringssl"]
-	path = lib/boringssl
-	url = https://github.com/google/boringssl.git
 [submodule "lib/naxsi"]
 	path = lib/naxsi
 	url = https://github.com/wargio/naxsi.git
+[submodule "lib/openssl"]
+	path = lib/openssl
+	url = https://github.com/openssl/openssl.git

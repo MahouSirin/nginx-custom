@@ -81,26 +81,6 @@ else
     BUILD_OPENSSL_LTO=""
 fi
 
-### Build BoringSSL
-### Use ninja-build for performance
-if [ ! -d "lib/boringssl/build" ]; then
-    cd lib/boringssl
-    mkdir build
-    cd build
-    cmake -GNinja ..
-    ninja
-    cd ..
-    ### Make symlink to './include' with OpenSSL Library
-    mkdir -p .openssl/lib
-    cd .openssl
-    ln -s ../include include
-    cd ..
-    ### Copy BoringSSL's crypto libraries to OpenSSL Library directory
-    cp build/crypto/libcrypto.a .openssl/lib
-    cp build/ssl/libssl.a .openssl/lib
-    cd ../..
-fi
-
 ### Temporary Ubuntu/Debian build error (libxslt/libxml2)
 ### URL : https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=721602
 TEMP_OPT="-lm"
@@ -165,8 +145,8 @@ auto/configure \
 --add-module=./lib/headers-more-nginx-module \
 ${BUILD_MODULES}
 
-### Skip OpenSSL Build to prevent Error 127
-touch lib/boringssl/.openssl/include/openssl/ssl.h
+### Skip OpenSSL Build
+#touch lib/openssl/include/openssl/ssl.h
 
 ### SERVER HEADER CONFIG
 NGX_AUTO_CONFIG_H="objs/ngx_auto_config.h";have="NGINX_SERVER";value="\"${SERVER_HEADER}\""; . auto/define
