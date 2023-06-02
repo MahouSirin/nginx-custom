@@ -111,7 +111,7 @@ auto/configure \
 --http-scgi-temp-path=${NGX_LIB}/scgi_temp \
 --http-uwsgi-temp-path=${NGX_LIB}/uwsgi_temp \
 --with-zlib=${BUILD_ZLIB} \
---with-openssl=./lib/boringssl \
+--with-openssl=./lib/openssl \
 --with-http_realip_module \
 --with-http_addition_module \
 --with-http_sub_module \
@@ -146,7 +146,7 @@ auto/configure \
 ${BUILD_MODULES}
 
 ### Skip OpenSSL Build
-#touch lib/openssl/include/openssl/ssl.h
+#touch lib/openssl/.openssl/include/openssl/ssl.h
 
 ### SERVER HEADER CONFIG
 NGX_AUTO_CONFIG_H="objs/ngx_auto_config.h";have="NGINX_SERVER";value="\"${SERVER_HEADER}\""; . auto/define
