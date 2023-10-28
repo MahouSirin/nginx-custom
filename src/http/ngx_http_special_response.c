@@ -19,14 +19,14 @@ static ngx_int_t ngx_http_send_refresh(ngx_http_request_t *r);
 
 
 static u_char ngx_http_error_full_tail[] =
-"<hr><center>" NGINX_VER "</center>" CRLF
+"<hr><center>" NGINX_SERVER "</center>" CRLF
 "</body>" CRLF
 "</html>" CRLF
 ;
 
 
 static u_char ngx_http_error_build_tail[] =
-"<hr><center>" NGINX_VER_BUILD "</center>" CRLF
+"<hr><center>" NGINX_SERVER "</center>" CRLF
 "</body>" CRLF
 "</html>" CRLF
 ;
@@ -226,9 +226,9 @@ static char ngx_http_error_416_page[] =
 
 static char ngx_http_error_418_page[] =
 "<html>" CRLF
-"<head><title>418 I'm a teapot</title></head>" CRLF
+"<head><title>418 I'm a Teapot</title></head>" CRLF
 "<body>" CRLF
-"<center><h1>418 I'm a teapot</h1></center>" CRLF
+"<center><h1>416 I'm a Teapot</h1></center>" CRLF
 ;
 
 

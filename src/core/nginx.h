@@ -12,8 +12,8 @@
 #define NGINX_SERVER       "raiden"
 #endif
 
-#define nginx_version      1025002
-#define NGINX_VERSION      "1.25.2"
+#define nginx_version      1025004
+#define NGINX_VERSION      "1.25.4"
 #define NGINX_VER          NGINX_SERVER "/" NGINX_VERSION
 
 #ifdef NGX_BUILD
