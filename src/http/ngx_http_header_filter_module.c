@@ -98,7 +98,7 @@ static ngx_str_t ngx_http_status_lines[] = {
     ngx_string("415 Unsupported Media Type"),
     ngx_string("416 Requested Range Not Satisfiable"),
     ngx_null_string,  /* "417 Expectation Failed" */
-    ngx_string("418 I'm a Teapot"),
+    ngx_string("418 I'm A Teapot"),
     ngx_null_string,  /* "419 unused" */
     ngx_null_string,  /* "420 unused" */
     ngx_string("421 Misdirected Request"),
