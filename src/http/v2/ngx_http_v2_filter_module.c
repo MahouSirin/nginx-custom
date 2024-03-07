@@ -114,7 +114,6 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
     ngx_http_core_loc_conf_t  *clcf;
     ngx_http_core_srv_conf_t  *cscf;
     u_char                     addr[NGX_SOCKADDR_STRLEN];
-
 #if (NGX_HTTP_GZIP)
     static const u_char accept_encoding[12] =
         "\x8b\x84\x84\x2d\x69\x5b\x05\x44\x3c\x86\xaa\x6f";
